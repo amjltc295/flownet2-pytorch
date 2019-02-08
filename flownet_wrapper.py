@@ -9,42 +9,41 @@ from models import FlowNet2  # the path is depended on where you create this mod
 from utils.frame_utils import read_gen  # the path is depended on where you create this module
 
 
-def setup(args=None, use_cuda=True, checkpoint_path='./FlowNet2_checkpoint.pth'):
-    Args = namedtuple('Args', ['fp16', 'rgb_max'])
-    args = Args(False, 255) if args is None else args
-    net = FlowNet2(args).cuda() if use_cuda else FlowNet2(args)
-    pretrained_dict = torch.load(checkpoint_path)
-    net.load_state_dict(pretrained_dict["state_dict"])
-    return net
+class FlowNetWrapper:
+    def __init__(self, args=None, use_cuda=True, checkpoint_path='./FlowNet2_checkpoint.pth',
+                 pad_factor=64):
+        Args = namedtuple('Args', ['fp16', 'rgb_max'])
+        args = Args(False, 255) if args is None else args
+        self.net = FlowNet2(args).cuda() if use_cuda else FlowNet2(args)
+        pretrained_dict = torch.load(checkpoint_path)
+        self.net.load_state_dict(pretrained_dict["state_dict"])
+        self.pad_factor = pad_factor
 
+    def pad(self, img):
+        h, w, c = img.shape
+        pad_h = ceil(h / self.pad_factor) * self.pad_factor
+        pad_w = ceil(w / self.pad_factor) * self.pad_factor
+        padded_img = np.zeros([pad_h, pad_w, c])
+        padded_img[:h, :w, :] = img
+        return padded_img
 
-def pad(img, factor=64):
-    h, w, c = img.shape
-    pad_h = ceil(h / factor) * factor
-    pad_w = ceil(w / factor) * factor
-    padded_img = np.zeros([pad_h, pad_w, c])
-    padded_img[:h, :w, :] = img
-    return padded_img
+    def unpad(self, img, size):
+        h, w = size
+        return img[:h, :w, :]
 
+    def infer(self, img1, img2):
+        assert img1.shape == img2.shape
+        h, w, c = img1.shape
+        padded_img1, padded_img2 = self.pad(img1), self.pad(img2)
+        images = [padded_img1, padded_img2]
+        images = np.array(images).transpose(3, 0, 1, 2)
+        im = torch.from_numpy(images.astype(np.float32)).unsqueeze(0).cuda()
 
-def unpad(img, size):
-    h, w = size
-    return img[:h, :w, :]
-
-
-def infer(net, img1, img2):
-    assert img1.shape == img2.shape
-    h, w, c = img1.shape
-    padded_img1, padded_img2 = pad(img1), pad(img2)
-    images = [padded_img1, padded_img2]
-    images = np.array(images).transpose(3, 0, 1, 2)
-    im = torch.from_numpy(images.astype(np.float32)).unsqueeze(0).cuda()
-
-    # process the image pair to obtian the flow
-    result = net(im).squeeze()
-    result_data = result.data.cpu().numpy().transpose(1, 2, 0)
-    result_data = unpad(result_data, (h, w))
-    return result_data
+        # process the image pair to obtian the flow
+        result = self.net(im).squeeze()
+        result_data = result.data.cpu().numpy().transpose(1, 2, 0)
+        result_data = self.unpad(result_data, (h, w))
+        return result_data
 
 
 def parse_args():
@@ -58,10 +57,10 @@ def parse_args():
 
 if __name__ == "__main__":
     args = parse_args()
-    net = setup(checkpoint_path=args.ckpt)
+    flownet_wrapper = FlowNetWrapper(checkpoint_path=args.ckpt)
     img1 = read_gen(args.img1)
     img2 = read_gen(args.img2)
-    result = infer(net, img1, img2)
+    result = flownet_wrapper.infer(img1, img2)
     breakpoint()
     print(result)
 """
