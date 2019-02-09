@@ -1,3 +1,4 @@
+import os
 import argparse
 from collections import namedtuple
 from math import ceil
@@ -31,6 +32,19 @@ class FlowNetWrapper:
         h, w = size
         return img[:h, :w, :]
 
+    def infer_video(self, frames_dir):
+        frame_files = sorted([
+            f for f in os.listdir(frames_dir)
+            if os.path.isfile(os.path.join(frames_dir, f))
+        ])
+        flows = []
+        for i in range(len(frame_files) - 1):
+            img1 = read_gen(frame_files[i])
+            img2 = read_gen(frame_files[i + 1])
+            flow = self.infer(img1, img2)
+            flows.append(flow)
+        return flows
+
     def infer(self, img1, img2):
         assert img1.shape == img2.shape
         h, w, c = img1.shape
@@ -38,6 +52,7 @@ class FlowNetWrapper:
         images = [padded_img1, padded_img2]
         images = np.array(images).transpose(3, 0, 1, 2)
         im = torch.from_numpy(images.astype(np.float32)).unsqueeze(0).cuda()
+        breakpoint()
 
         # process the image pair to obtian the flow
         result = self.net(im).squeeze()
