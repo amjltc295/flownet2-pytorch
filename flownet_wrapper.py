@@ -1,4 +1,4 @@
-import os
+# import os
 import argparse
 from collections import namedtuple
 from math import ceil
@@ -6,8 +6,8 @@ from math import ceil
 import torch
 import numpy as np
 
-from models import FlowNet2  # the path is depended on where you create this module
-from utils.frame_utils import read_gen  # the path is depended on where you create this module
+from .models import FlowNet2  # the path is depended on where you create this module
+from .utils.frame_utils import read_gen  # the path is depended on where you create this module
 
 
 class FlowNetWrapper:
@@ -20,29 +20,30 @@ class FlowNetWrapper:
         self.net.load_state_dict(pretrained_dict["state_dict"])
         self.pad_factor = pad_factor
 
-    def pad(self, img):
-        h, w, c = img.shape
+    def pad(self, img, input_type=np):
+        if input_type == np:
+            h, w, c = img.shape
+        else:
+            c, h, w = img.shape
         pad_h = ceil(h / self.pad_factor) * self.pad_factor
         pad_w = ceil(w / self.pad_factor) * self.pad_factor
-        padded_img = np.zeros([pad_h, pad_w, c])
-        padded_img[:h, :w, :] = img
+        padded_img = input_type.zeros([c, pad_h, pad_w])
+        padded_img[:, :h, :w] = img
         return padded_img
 
-    def unpad(self, img, size):
-        h, w = size
-        return img[:h, :w, :]
-
-    def infer_video(self, frames_dir):
-        frame_files = sorted([
-            f for f in os.listdir(frames_dir)
-            if os.path.isfile(os.path.join(frames_dir, f))
-        ])
+    def infer_video(self, frame_tensors):
         flows = []
-        for i in range(len(frame_files) - 1):
-            img1 = read_gen(frame_files[i])
-            img2 = read_gen(frame_files[i + 1])
-            flow = self.infer(img1, img2)
-            flows.append(flow)
+        B, L, C, H, W = frame_tensors.shape
+        flows = torch.zeros([B, L - 1, 2, H, W])
+        for batch_id in range(B):
+            for i in range(L - 1):
+                img1 = frame_tensors[batch_id, i]
+                img2 = frame_tensors[batch_id, i + 1]
+                padded_img1, padded_img2 = self.pad(img1, input_type=torch), self.pad(img2, input_type=torch)
+                im = torch.cat([padded_img1.unsqueeze(1), padded_img2.unsqueeze(1)], dim=1).unsqueeze(0).cuda()
+                result = self.net(im).squeeze()
+                result_data = result[:, :H, :W]  # unpad
+                flows[batch_id, i, :, :, :] = result_data
         return flows
 
     def infer(self, img1, img2):
@@ -51,10 +52,11 @@ class FlowNetWrapper:
         padded_img1, padded_img2 = self.pad(img1), self.pad(img2)
         images = [padded_img1, padded_img2]
         images = np.array(images).transpose(3, 0, 1, 2)
+
         im = torch.from_numpy(images.astype(np.float32)).unsqueeze(0).cuda()
         breakpoint()
 
-        # process the image pair to obtian the flow
+        # process the image pair to obtian the flo
         result = self.net(im).squeeze()
         result_data = result.data.cpu().numpy().transpose(1, 2, 0)
         result_data = self.unpad(result_data, (h, w))
